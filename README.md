@@ -1,3 +1,78 @@
+```
+python3.8
+
+pip list
+Package                 Version
+----------------------- ------------------
+absl-py                 2.3.1
+aiohappyeyeballs        2.4.4
+aiohttp                 3.10.11
+aiosignal               1.3.1
+async-timeout           5.0.1
+attrs                   25.3.0
+av                      12.3.0
+certifi                 2026.2.25
+cffi                    1.17.1
+charset-normalizer      3.4.6
+cloudpickle             3.1.2
+cryptography            46.0.6
+frozenlist              1.5.0
+fsspec                  2025.3.0
+future                  1.0.0
+fvcore                  0.1.5.post20221221
+google-auth             2.49.1
+google-auth-oauthlib    1.0.0
+grpcio                  1.70.0
+idna                    3.11
+importlib_metadata      8.5.0
+iopath                  0.1.10
+lightning-utilities     0.11.9
+Markdown                3.7
+MarkupSafe              2.1.5
+multidict               6.1.0
+numpy                   1.24.4
+oauthlib                3.3.1
+opencv-python           4.13.0.92
+packaging               26.0
+parameterized           0.9.0
+pillow                  10.4.0
+pip                     24.0
+portalocker             3.0.0
+propcache               0.2.0
+protobuf                5.29.6
+pyasn1                  0.6.3
+pyasn1_modules          0.4.2
+pycparser               2.23
+pyDeprecate             0.3.1
+pytorch-lightning       1.5.0
+pytorchvideo            0.1.3
+PyYAML                  6.0.3
+requests                2.32.4
+requests-oauthlib       2.0.0
+setuptools              59.5.0
+six                     1.15.0
+submitit                1.5.4
+tabulate                0.9.0
+tensorboard             2.14.0
+tensorboard-data-server 0.7.2
+termcolor               2.4.0
+torch                   1.10.0
+torchaudio              0.10.0
+torchmetrics            0.11.0
+torchvision             0.11.1
+tqdm                    4.67.3
+typing_extensions       4.13.2
+urllib3                 2.2.3
+Werkzeug                3.0.6
+wheel                   0.45.1
+yacs                    0.1.8
+yarl                    1.15.2
+zipp                    3.20.2
+```
+
+---
+
+
 <p align="center">
  <img width="130%" src="./.github/media/logo_horizontal_color.png" />
 </p>
