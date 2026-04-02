@@ -36,8 +36,8 @@ from torchrecipes.utils.config_utils import get_class_name_str
 
 class Batch(TypedDict):
     """
-    PyTorchVideo batches are dictionaries containing each modality or metadata of
-    the batch collated video clips. For Kinetics it has the below keys and types.
+    PyTorchVideo 的 batch 是包含每种模态或元数据的字典。
+    对于 Kinetics，包含如下 key 和类型。
     """
 
     video: torch.Tensor  # (B, C, T, H, W)
@@ -52,38 +52,28 @@ EnsembleMethod = Literal["sum", "max"]
 
 class VideoClassificationModule(pl.LightningModule):
     """
-    The Lightning module supporting the video classification task.
+    支持视频分类任务的 Lightning 模块。
 
-    Args:
-        model (OmegaConf): An omega conf object intializing the neural-network modle.
-            Example configs can be found in `pytorchvideo_trainer/conf/module/model`
-        loss(OmegaConf): An omega conf object intializing the loss function.
-            Example configs can be found in `pytorchvideo_trainer/conf/module/loss`
-        optim (OmegaConf): An omega conf object for constructing the optimizer object.
-            The associated config schema can be found at
-            `pytorchvideo_trainer.module.optimizer.OptimizerConf`.
-            Example configs can be found in `pytorchvideo_trainer/conf/module/optim`
-        metrics (OmegaConf): The metrics to track, which will be used for both train,
-            validation and test. Example configs can be found in
-            `pytorchvideo_trainer/conf/module/metricx`
-        lr_scheduler (OmegaConf): An omega conf object associated with learning rate
-            scheduler used during trainer.
-            The associated config schema can be found at
-            `pytorchvideo_trainer.module.lr_policy.LRSchedulerConf`.
-            Example configs can be found in `pytorchvideo_trainer/conf/module/lr_scheduler`
-        modality_key (str): The modality key used in data processing, default: "video".
-        ensemble_method (str): The data ensembling method to control how we accumulate
-            the testing results at video level, which is optional. Users may choose from
-            ["sum", "max", None], If it is set to None, no data ensembling will be applied.
-        num_classes (int): The number of classes in the dataset.
-        num_sync_devices (int): Number of gpus to sync bathcnorm over. Only works if
-            pytorch lightning trainer's sync_batchnorm parameter is to false.
-        batch_transform (OmegaConf): An optional omega conf object, for constructing the
-            data transform method that act upon the entire mini batch. Examples include,
-            MixVideo transform, etc.
-        clip_gradient_norm (float): Performs gradient clipping if set to a positive value.
-            Since, we use Pytorch-lightning's manual optimization approach gradient clipping
-            has to be be set in the lightning module instead of the Trainer object.
+    参数说明：
+        model (OmegaConf)：用于初始化神经网络模型的 OmegaConf 对象。
+            示例配置见 `pytorchvideo_trainer/conf/module/model`
+        loss (OmegaConf)：用于初始化损失函数的 OmegaConf 对象。
+            示例配置见 `pytorchvideo_trainer/conf/module/loss`
+        optim (OmegaConf)：用于构建优化器的 OmegaConf 对象。
+            配置 schema 见 `pytorchvideo_trainer.module.optimizer.OptimizerConf`。
+            示例配置见 `pytorchvideo_trainer/conf/module/optim`
+        metrics (OmegaConf)：要追踪的指标，训练、验证和测试都会用到。
+            示例配置见 `pytorchvideo_trainer/conf/module/metricx`
+        lr_scheduler (OmegaConf)：训练过程中使用的学习率调度器配置。
+            配置 schema 见 `pytorchvideo_trainer.module.lr_policy.LRSchedulerConf`。
+            示例配置见 `pytorchvideo_trainer/conf/module/lr_scheduler`
+        modality_key (str)：数据处理时使用的模态 key，默认 "video"。
+        ensemble_method (str)：测试时视频级别集成方法，可选 ["sum", "max", None]。
+            None 表示不做集成。
+        num_classes (int)：数据集类别数。
+        num_sync_devices (int)：同步 BatchNorm 的 GPU 数，仅在 trainer 的 sync_batchnorm 为 false 时有效。
+        batch_transform (OmegaConf)：可选，对整个 mini batch 进行变换的方法配置，如 MixVideo 等。
+        clip_gradient_norm (float)：若大于 0，则进行梯度裁剪。由于采用 Lightning 的手动优化，梯度裁剪需在模块内设置。
     """
 
     def __init__(
@@ -142,12 +132,12 @@ class VideoClassificationModule(pl.LightningModule):
     # pyre-ignore[14]: *args, **kwargs are not torchscriptable.
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward defines the prediction/inference actions.
+        前向传播，定义预测/推理操作。
         """
         return self.model(x)
 
     def _num_training_steps_per_epoch(self) -> int:
-        """training steps per epoch inferred from datamodule and devices."""
+        """根据 datamodule 和设备数推断每个 epoch 的训练步数。"""
         dataloader = self.trainer.datamodule.train_dataloader()
         world_size = self.trainer.world_size
 
@@ -159,7 +149,7 @@ class VideoClassificationModule(pl.LightningModule):
         return dataset_size // world_size // dataloader.batch_size
 
     def manual_update_lr(self) -> None:
-        """Utility function for manually updating the optimizer learning rate"""
+        """手动更新优化器学习率的工具函数"""
 
         opt = self.optimizers()
 
@@ -180,7 +170,7 @@ class VideoClassificationModule(pl.LightningModule):
                 set_lr(opt, lr)  # pyre-ignore[6]
 
     def manual_zero_opt_grad(self) -> None:
-        """Utility function for zeroing optimzer gradients"""
+        """手动将优化器梯度清零的工具函数"""
         opt = self.optimizers()
         if isinstance(opt, list):
             for op in opt:
@@ -189,7 +179,7 @@ class VideoClassificationModule(pl.LightningModule):
             opt.zero_grad()
 
     def manual_opt_step(self) -> None:
-        """Utility function for manually stepping the optimzer"""
+        """手动执行优化器 step 的工具函数"""
         opt = self.optimizers()
         if isinstance(opt, list):
             for op in opt:
@@ -201,9 +191,7 @@ class VideoClassificationModule(pl.LightningModule):
         self, batch: Batch, batch_idx: int, *args: Any, **kwargs: Any
     ) -> None:
         """
-        The PyTorchVideo models and transforms expect the same input shapes and
-        dictionary structure making this function just a matter of unwrapping the
-        dict and feeding it through the model/loss.
+        PyTorchVideo 的模型和变换都要求输入字典结构和张量形状一致，因此这里只需解包字典并送入模型/损失函数。
         """
         self.cur_epoch_step += 1  # pyre-ignore[16]
 
@@ -226,7 +214,7 @@ class VideoClassificationModule(pl.LightningModule):
         self, batch: Batch, batch_idx: int, *args: Any, **kwargs: Any
     ) -> Dict[str, Any]:
         """
-        Operates on a single batch of data from the validation set.
+        处理验证集的单个 batch。
         """
         return self._step(batch, batch_idx, "val")
 
@@ -234,7 +222,7 @@ class VideoClassificationModule(pl.LightningModule):
         self, batch: Batch, batch_idx: int, *args: Any, **kwargs: Any
     ) -> Optional[Dict[str, Any]]:
         """
-        Operates on a single batch of data from the test set.
+        处理测试集的单个 batch。
         """
         if self.ensemble_method:
             self._test_step_with_data_ensembling(batch, batch_idx)
@@ -243,7 +231,7 @@ class VideoClassificationModule(pl.LightningModule):
 
     def _test_step_with_data_ensembling(self, batch: Batch, batch_idx: int) -> None:
         """
-        Operates on a single batch of data from the test set.
+        处理测试集的单个 batch。
         """
         assert (
             isinstance(batch, dict)
@@ -291,9 +279,8 @@ class VideoClassificationModule(pl.LightningModule):
         self, preds: torch.Tensor, labels: torch.Tensor, video_ids: torch.Tensor
     ) -> None:
         """
-        Ensemble multiple predictions of the same view together. This relies on the
-        fact that the dataloader reads multiple clips of the same video at different
-        spatial crops.
+        对同一视频的多个视角预测结果进行集成。
+        依赖于 dataloader 会读取同一视频在不同空间裁剪下的多个片段。
         """
         for i in range(preds.shape[0]):
             vid_id = int(video_ids[i])
@@ -316,15 +303,14 @@ class VideoClassificationModule(pl.LightningModule):
         torch.optim.Optimizer,
         Tuple[Iterable[torch.optim.Optimizer], Iterable[_LRScheduler]],
     ]:
-        """Pytorch-Lightning's method for configuring optimizer"""
+        """Pytorch-Lightning 配置优化器的方法"""
         return self.optim
 
     def _step(self, batch: Batch, batch_idx: int, phase_type: str) -> Dict[str, Any]:
         assert (
             isinstance(batch, dict) and self.modality_key in batch and "label" in batch
         ), (
-            f"Returned batch [{batch}] is not a map with '{self.modality_key}' and"
-            + "'label' keys"
+            f"返回的 batch [{batch}] 不是包含 '{self.modality_key}' 和 'label' 键的字典"
         )
 
         y_hat = self(batch[self.modality_key])
@@ -340,7 +326,7 @@ class VideoClassificationModule(pl.LightningModule):
         else:
             loss = None
 
-        ## TODO: Move MixUP transform metrics to sperate method.
+        ## TODO: 将 MixUP 变换的指标计算移到单独方法。
         if (
             phase_type == "train"
             and self.batch_transform is not None
@@ -378,10 +364,9 @@ class VideoClassificationModule(pl.LightningModule):
 
     def _convert_to_sync_bn(self) -> None:
         """
-        Converts BatchNorm into sync-batchnorm.
-        If pytorch lightning trainer's sync_batchnorm parameter is to true,
-        performs global sync-batchnorm across all nodes and gpus. Else,
-        if perform local sync-batchnorm acroos specified number of gpus.
+        将 BatchNorm 转换为同步 BatchNorm。
+        如果 trainer 的 sync_batchnorm 参数为 true，则在所有节点和 GPU 上执行全局同步 BatchNorm。
+        否则，在指定数量的 GPU 上执行本地同步 BatchNorm。
         """
         if (
             hasattr(self.trainer.training_type_plugin, "sync_batchnorm")
@@ -399,20 +384,18 @@ class VideoClassificationModule(pl.LightningModule):
 
     def on_fit_start(self) -> None:
         """
-        Called at the very beginning of fit.
-        If on DDP it is called on every process.
+        在 fit 开始时调用。
+        如果是 DDP，每个进程都会调用。
         """
         self._convert_to_sync_bn()
 
 
 def create_syncbn_process_group(group_size: int) -> List[int]:
     """
-    Creates process groups to be used for syncbn of a give ``group_size`` and returns
-    process group that current GPU participates in.
+    创建用于同步 BatchNorm 的进程组，组大小为 group_size，并返回当前 GPU 所在的进程组。
 
-    Args:
-        group_size (int): number of GPU's to collaborate for sync bn. group_size should
-            be >=2 else, no action is taken.
+    参数：
+        group_size (int)：参与同步 BN 的 GPU 数，需 >=2，否则不做处理。
     """
     assert group_size > 1, (
         f"Invalid group size {group_size} to convert to sync batchnorm."
@@ -476,16 +459,16 @@ def create_classification_model_from_modelzoo(
     model: nn.Module,
 ) -> nn.Module:
     """
-    Builds a model from PyTorchVideo's model zoo checkpoint.
+    从 PyTorchVideo 的模型库 checkpoint 构建模型。
 
-    Example config for building this method can be found at -
+    示例配置见：
     `pytorchvideo_trainer/conf/module/model/from_model_zoo_checkpoint.yaml`
 
-    Args:
-        checkpoint_path (str): Path the pretrained model weights.
-        model (nn.Module): Module to load the checkpoints into.
-    Returns:
-        model (nn.Module): Returns the model with pretrained weights loaded.
+    参数：
+        checkpoint_path (str)：预训练模型权重路径。
+        model (nn.Module)：要加载权重的模型。
+    返回：
+        model (nn.Module)：加载了预训练权重的模型。
     """
 
     with g_pathmgr.open(checkpoint_path, "rb") as f:
@@ -499,15 +482,15 @@ def create_classification_model_from_lightning(
     checkpoint_path: str,
 ) -> nn.Module:
     """
-    Builds a model from pytorchvideo_trainer's PytorchLightning checkpoint.
+    从 pytorchvideo_trainer 的 PytorchLightning checkpoint 构建模型。
 
-    Example config for building this method can be found at -
+    示例配置见：
     `pytorchvideo_trainer/conf/module/model/from_lightning_checkpoint.yaml`
 
-    Args:
-        checkpoint_path (str): Path the pretrained model weights.
-    Returns:
-        model (nn.Module): Returns the model with pretrained weights loaded.
+    参数：
+        checkpoint_path (str)：预训练模型权重路径。
+    返回：
+        model (nn.Module)：加载了预训练权重的模型。
     """
     lightning_model = VideoClassificationModule.load_from_checkpoint(checkpoint_path)
     return lightning_model.model
