@@ -19,6 +19,11 @@ from pytorchvideo.transforms import (
     ShortSideScale,
     UniformTemporalSubsample,
 )
+from pytorchvideo.models.x3d import create_x3d, create_x3d_bottleneck_block
+from pytorchvideo.models.hub import x3d_xs, x3d_s, x3d_m
+from pytorchvideo.layers.swish import Swish
+from torch import nn
+
 # 在文件顶部 import 区域添加（约第 15 行附近）
 from torchmetrics import Accuracy
 from slurm import copy_and_run_with_config
@@ -57,34 +62,57 @@ from torchvision.transforms import (
 class VideoClassificationLightningModule(pytorch_lightning.LightningModule):
     def __init__(self, args):
         """
-        该 LightningModule 实现构建了一个 PyTorchVideo 的 ResNet，
+        该 LightningModule 实现构建了一个 PyTorchVideo 的 X3D 模型，
         定义了训练和验证所用的损失函数（交叉熵），并配置了优化器。
         """
         self.args = args
         super().__init__()
-        self.train_accuracy = Accuracy(task="multiclass", num_classes=21)
-        self.val_accuracy = Accuracy(task="multiclass", num_classes=21)
+        self.train_accuracy = Accuracy(task="multiclass", num_classes=20)
+        self.val_accuracy = Accuracy(task="multiclass", num_classes=20)
 
         #############
         # PTV 模型 #
         #############
 
-        # 这里我们构建了 PyTorchVideo 的模型。本例中使用的是适用于 Kinetics（如 400 类）的 ResNet。
-        # 你可以根据实际需求替换为其他 PyTorchVideo 模型（如 SlowFast 可用 create_slowfast）。
-        if self.args.arch == "video_resnet":
-            self.model = pytorchvideo.models.resnet.create_resnet(
-                input_channel=3,
-                model_num_class=21,
-            )
+        # 用户提供了 PyTorchVideo 的 X3D 测试文件，我需要根据这个测试文件中的参数来修正 trainx3d.py 中的 create_x3d 调用。 从测试文件中可以看到 create_x3d 的正确参数： 
+        # - input_clip_length: 输入视频帧数 
+        # - input_crop_size: 输入裁剪尺寸 
+        # - model_num_class: 分类类别数 
+        # - dropout_rate: dropout 率 
+        # - width_factor: 宽度因子 
+        # - depth_factor: 深度因子 
+        # - norm: 归一化层 
+        # - activation: 激活函数 
+        # - stem_dim_in: stem 层输入维度 
+        # - stem_conv_kernel_size: stem 卷积核大小 
+        # - stem_conv_stride: stem 卷积步长 
+        # - stage_conv_kernel_size: 各阶段卷积核大小 
+        # - stage_spatial_stride: 各阶段空间步长 
+        # - stage_temporal_stride: 各阶段时间步长 
+        # - bottleneck: bottleneck 块创建函数 
+        # - bottleneck_factor: bottleneck 因子（expand_ratio） 
+        # - se_ratio: SE 模块比例 - inner_act: 内部激活函数 
+        # - head_dim_out: 输出层维度 - head_pool_act: 池化激活 
+        # - head_bn_lin5_on: 是否使用 BN 
+        # - head_activation: 头部激活函数 X3D 变体参数： 
+        # - X3D-XS: (4, 160, 2.0, 2.2, 2.25) 
+        # - (input_clip_length, input_crop_size, width_factor, depth_factor, bottleneck_factor) 
+        # - X3D-S: (13, 160, 2.0, 2.2, 2.25) 
+        # - X3D-M: (16, 224, 2.0, 2.2, 2.25) 
+        # - X3D-L: (16, 312, 2.0, 5.0, 2.25) 现在我需要根据这些参数配置来更新 trainx3d.py 文件中的模型创建代码。
+
+        # 使用 X3D 模型 - 根据测试文件的正确参数
+        if self.args.arch == "x3d_xs":
+            self.model = x3d_xs(pretrained=False, model_num_class=20)
             self.batch_key = "video"
-        elif self.args.arch == "audio_resnet":
-            self.model = pytorchvideo.models.resnet.create_acoustic_resnet(
-                input_channel=1,
-                model_num_class=21,
-            )
-            self.batch_key = "audio"
+        elif self.args.arch == "x3d_s":
+            self.model = x3d_s(pretrained=False, model_num_class=20)
+            self.batch_key = "video"
+        elif self.args.arch == "x3d_m":
+            self.model = x3d_m(pretrained=False, model_num_class=20)
+            self.batch_key = "video"
         else:
-            raise Exception("{self.args.arch} not supported")
+            raise Exception(f"{self.args.arch} not supported")
 
     def on_train_epoch_start(self):
         """
@@ -363,8 +391,8 @@ def main():
     parser.add_argument("--weight_decay", default=1e-4, type=float)
     parser.add_argument(
         "--arch",
-        default="video_resnet",
-        choices=["video_resnet", "audio_resnet"],
+        default="x3d_xs",
+        choices=["x3d_xs", "x3d_s", "x3d_m"],
         type=str,
     )
 
@@ -377,13 +405,13 @@ def main():
     parser.add_argument(
         "--data_type", default="video", choices=["video", "audio"], type=str
     )
-    parser.add_argument("--video_num_subsampled", default=8, type=int)
-    parser.add_argument("--video_means", default=(0.45, 0.45, 0.45), type=tuple)
-    parser.add_argument("--video_stds", default=(0.225, 0.225, 0.225), type=tuple)
-    parser.add_argument("--video_crop_size", default=224, type=int)
+    parser.add_argument("--video_num_subsampled", default=4, type=int)  # X3D 通常使用 4 帧
+    parser.add_argument("--video_crop_size", default=160, type=int)
+    parser.add_argument("--video_means", default=(0.45, 0.45, 0.45), type=tuple)  # 新增
+    parser.add_argument("--video_stds", default=(0.225, 0.225, 0.225), type=tuple)  # 新增
     parser.add_argument("--video_min_short_side_scale", default=256, type=int)
     parser.add_argument("--video_max_short_side_scale", default=320, type=int)
-    parser.add_argument("--video_horizontal_flip_p", default=0.5, type=float)
+    parser.add_argument("--video_horizontal_flip_p", default=0.5, type=float)  # 新增
     parser.add_argument("--audio_raw_sample_rate", default=44100, type=int)
     parser.add_argument("--audio_resampled_rate", default=16000, type=int)
     parser.add_argument("--audio_mel_window_size", default=32, type=int)
