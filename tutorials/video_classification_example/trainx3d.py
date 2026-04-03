@@ -37,6 +37,9 @@ from torchvision.transforms import (
     RandomHorizontalFlip,
 )
 
+# 在 trainx3d.py 顶部导入
+from pytorchvideo.data import Ucf101
+
 
 """
 本视频分类示例演示了如何将 PyTorchVideo 的模型、数据集和变换与 PyTorch Lightning 模块结合使用。具体展示了如何构建一个简单的流水线，在 Kinetics 视频数据集上训练 Resnet。
@@ -67,8 +70,6 @@ class VideoClassificationLightningModule(pytorch_lightning.LightningModule):
         """
         self.args = args
         super().__init__()
-        self.train_accuracy = Accuracy(task="multiclass", num_classes=20)
-        self.val_accuracy = Accuracy(task="multiclass", num_classes=20)
 
         #############
         # PTV 模型 #
@@ -102,17 +103,13 @@ class VideoClassificationLightningModule(pytorch_lightning.LightningModule):
         # - X3D-L: (16, 312, 2.0, 5.0, 2.25) 现在我需要根据这些参数配置来更新 trainx3d.py 文件中的模型创建代码。
 
         # 使用 X3D 模型 - 根据测试文件的正确参数
-        if self.args.arch == "x3d_xs":
-            self.model = x3d_xs(pretrained=False, model_num_class=20)
-            self.batch_key = "video"
-        elif self.args.arch == "x3d_s":
-            self.model = x3d_s(pretrained=False, model_num_class=20)
-            self.batch_key = "video"
-        elif self.args.arch == "x3d_m":
-            self.model = x3d_m(pretrained=False, model_num_class=20)
-            self.batch_key = "video"
-        else:
-            raise Exception(f"{self.args.arch} not supported")
+        self.model = torch.hub.load("facebookresearch/pytorchvideo", "x3d_xs",pretrained=True)
+        self.model.blocks[5].proj = torch.nn.Linear(self.model.blocks[5].proj.in_features, 20)
+
+        self.train_accuracy = Accuracy(task="multiclass", num_classes=20)
+        self._accuracy = Accuracy(task="multiclass", num_classes=20)
+        self.criterion = nn.CrossEntropyLoss()
+
 
     def on_train_epoch_start(self):
         """
@@ -131,44 +128,24 @@ class VideoClassificationLightningModule(pytorch_lightning.LightningModule):
 
     def training_step(self, batch, batch_idx):
         """
-        该函数在训练 epoch 的内部循环中被调用。它必须返回一个损失值，供 loss.backward() 使用。
-        可以用 self.log(...) 记录训练指标。
-
-        PyTorchVideo 的 batch 是一个字典，包含每种模态或元数据。Kinetics 的典型 key 如下：
-           {
-               'video': <video_tensor>,
-               'audio': <audio_tensor>,
-               'label': <action_label>,
-           }
-
-        - "video"：张量，形状为 (batch, channels, time, height, width)
-        - "audio"：张量，形状为 (batch, channels, time, 1, frequency)
-        - "label"：张量，形状为 (batch, 1)
-
         PyTorchVideo 的模型和变换都要求输入字典结构和张量形状一致，因此这里只需解包字典并送入模型/损失函数。
         """
-        x = batch[self.batch_key]
-        y_hat = self.model(x)
-        loss = F.cross_entropy(y_hat, batch["label"])
-        acc = self.train_accuracy(F.softmax(y_hat, dim=-1), batch["label"])
-        self.log("train_loss", loss)
-        self.log(
-            "train_acc", acc, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True
-        )
+        y_hat = self.model(batch["video"])
+        loss = self.criterion(y_hat, batch["label"])
+        acc = self._accuracy(y_hat, batch["label"])
+        self.log("train_loss", loss, prog_bar=True)
+        self.log("train_acc", acc, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         """
         该函数在验证循环的内部被调用。对于本例来说，与训练循环类似，只是指标名称不同。
         """
-        x = batch[self.batch_key]
-        y_hat = self.model(x)
-        loss = F.cross_entropy(y_hat, batch["label"])
-        acc = self.val_accuracy(F.softmax(y_hat, dim=-1), batch["label"])
-        self.log("val_loss", loss)
-        self.log(
-            "val_acc", acc, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True
-        )
+        y_hat = self.model(batch["video"])
+        loss = self.criterion(y_hat, batch["label"])
+        acc = self._accuracy(y_hat, batch["label"])
+        self.log("train_loss", loss, prog_bar=True)
+        self.log("train_acc", acc, prog_bar=True)
         return loss
 
     def configure_optimizers(self):
@@ -302,20 +279,17 @@ class KineticsDataModule(pytorch_lightning.LightningDataModule):
         """
         定义 PyTorch Lightning Trainer 用于训练/测试的训练 DataLoader。
         """
-            # 修复：使用新版本的分布式检测方式
         sampler = RandomSampler
 
         train_transform = self._make_transforms(mode="train")
-        self.train_dataset = LimitDataset(
-            pytorchvideo.data.Kinetics(
-                data_path=os.path.join(self.args.data_path, "train.csv"),
-                clip_sampler=pytorchvideo.data.make_clip_sampler(
-                    "random", self.args.clip_duration
-                ),
-                video_path_prefix=self.args.video_path_prefix,
-                transform=train_transform,
-                video_sampler=sampler,
-            )
+        self.train_dataset = Ucf101(
+            data_path=os.path.join(self.args.data_path, "train.csv"),
+            clip_sampler=pytorchvideo.data.make_clip_sampler(
+                "uniform", self.args.clip_duration
+            ),
+            video_path_prefix=self.args.video_path_prefix,
+            transform=train_transform,
+            decode_audio=False,
         )
         return torch.utils.data.DataLoader(
             self.train_dataset,
@@ -327,20 +301,19 @@ class KineticsDataModule(pytorch_lightning.LightningDataModule):
         """
         定义 PyTorch Lightning Trainer 用于训练/测试的验证 DataLoader。
         """
-        # 修复：使用新版本的分布式检测方式
-
         sampler = RandomSampler
         val_transform = self._make_transforms(mode="val")
 
-        self.val_dataset = pytorchvideo.data.Kinetics(
+        self.val_dataset = Ucf101(
             data_path=os.path.join(self.args.data_path, "val.csv"),
             clip_sampler=pytorchvideo.data.make_clip_sampler(
                 "uniform", self.args.clip_duration
             ),
             video_path_prefix=self.args.video_path_prefix,
             transform=val_transform,
-            video_sampler=sampler,
+            decode_audio=False,
         )
+        
         return torch.utils.data.DataLoader(
             self.val_dataset,
             batch_size=self.args.batch_size,
@@ -386,7 +359,7 @@ def main():
     parser.add_argument("--partition", default="dev", type=str)
 
     # Model parameters.
-    parser.add_argument("--lr", "--learning-rate", default=0.1, type=float)
+    parser.add_argument("--lr", "--learning-rate", default=0.0001, type=float)
     parser.add_argument("--momentum", default=0.9, type=float)
     parser.add_argument("--weight_decay", default=1e-4, type=float)
     parser.add_argument(
@@ -401,7 +374,7 @@ def main():
     parser.add_argument("--video_path_prefix", default="", type=str)
     parser.add_argument("--workers", default=4, type=int)
     parser.add_argument("--batch_size", default=8, type=int)
-    parser.add_argument("--clip_duration", default=2, type=float)
+    parser.add_argument("--clip_duration", default=1, type=float)
     parser.add_argument(
         "--data_type", default="video", choices=["video", "audio"], type=str
     )
@@ -424,9 +397,12 @@ def main():
     # Trainer parameters.
     parser = pytorch_lightning.Trainer.add_argparse_args(parser)
     parser.set_defaults(
-        max_epochs=5,
+        max_epochs=10,
+        accelerator="cpu",
+        devices=1,
         callbacks=[LearningRateMonitor()],
         replace_sampler_ddp=False,
+        log_every_n_steps=10,  # 降低 logging 间隔
     )
 
     # Build trainer, ResNet lightning-module and Kinetics data-module.
