@@ -126,7 +126,7 @@ def main():
     train_loader = DataLoader(
         train_dataset,
         batch_size=2,        # CPU 训练建议保持在 1-4 之间
-        num_workers=4,       # 根据 CPU 核心数调整，若卡住请设为 0
+        num_workers=8,       # 根据 CPU 核心数调整，若卡住请设为 0
         pin_memory=False     # CPU 模式下设为 False
     )
 
@@ -140,7 +140,7 @@ def main():
     val_loader = DataLoader(
         val_dataset,
         batch_size=2,
-        num_workers=4,
+        num_workers=8,
         pin_memory=False
     )
 
