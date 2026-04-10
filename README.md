@@ -1,6 +1,8 @@
 ```
 python3.8
 
+pip download -r ./requirements.txt
+
 pip list
 Package                 Version
 ----------------------- ------------------
