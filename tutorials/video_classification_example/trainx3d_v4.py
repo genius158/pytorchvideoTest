@@ -109,7 +109,7 @@ def get_runtime_config():
         return {
             "accelerator": "gpu",
             "devices": 1,
-            "precision": "16-mixed",
+            "precision": 16,
             "pin_memory": True,
             "device_name": torch.cuda.get_device_name(0),
         }
