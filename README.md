@@ -72,6 +72,18 @@ yarl                    1.15.2
 zipp                    3.20.2
 ```
 
+for gpu
+```
+gpu rtx3080 
+
+# 使用 pip
+pip install torch==1.10.0+cu113 torchvision==0.11.1+cu113 torchaudio==0.10.0+cu113 -f https://download.pytorch.org/whl/cu113/torch_stable.html
+
+# 使用 conda
+conda install pytorch==1.10.0 torchvision==0.11.1 torchaudio==0.10.0 cudatoolkit=11.3 -c pytorch -c conda-forge
+```
+
+
 ---
 
 
