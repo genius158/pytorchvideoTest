@@ -157,7 +157,7 @@ def main():
     trainer = pl.Trainer(
         accelerator="cpu",   # 明确使用 CPU
         devices=1,           # 核心数
-        max_epochs=150,       # 建议训练 30 轮以上观察趋势
+        max_epochs=200,       # 建议训练 30 轮以上观察趋势
         precision=32,        # CPU 不支持 16 位精度，必须设为 32
         log_every_n_steps=5, # 频繁记录日志方便观察 Loss
         callbacks=[checkpoint_callback],
