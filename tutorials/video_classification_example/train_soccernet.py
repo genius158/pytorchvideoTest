@@ -313,6 +313,37 @@ def get_runtime_config(requested_accelerator: str, requested_devices: int, reque
     }
 
 
+def maybe_prepare_resume_checkpoint(last_ckpt_path: str, reset_early_stopping_on_resume: bool) -> str:
+    if not reset_early_stopping_on_resume:
+        return last_ckpt_path
+
+    checkpoint = torch.load(last_ckpt_path, map_location="cpu")
+    callbacks_state = checkpoint.get("callbacks", {})
+    if not isinstance(callbacks_state, dict):
+        print(">>> [提示] checkpoint 中未找到 callbacks 状态，直接按原 checkpoint 恢复。")
+        return last_ckpt_path
+
+    filtered_callbacks = {}
+    removed_keys = []
+    for key, value in callbacks_state.items():
+        if "EarlyStopping" in str(key):
+            removed_keys.append(key)
+            continue
+        filtered_callbacks[key] = value
+
+    if not removed_keys:
+        print(">>> [提示] checkpoint 中未找到 EarlyStopping 状态，无需重置。")
+        return last_ckpt_path
+
+    checkpoint["callbacks"] = filtered_callbacks
+    patched_ckpt_path = os.path.join(os.path.dirname(last_ckpt_path), "last_reset_early_stopping.ckpt")
+    torch.save(checkpoint, patched_ckpt_path)
+    print(
+        f">>> 已重置 EarlyStopping 计数，将从新 checkpoint 恢复: {patched_ckpt_path}"
+    )
+    return patched_ckpt_path
+
+
 # ==========================================================================
 # 3. LightningModule
 # ==========================================================================
@@ -377,7 +408,7 @@ def parse_args():
     p.add_argument("--lr",             type=float, default=1e-4)
     p.add_argument("--max_epochs",     type=int,   default=60)
     p.add_argument("--patience",       type=int,   default=30,
-                   help="EarlyStopping 容忍轮数，默认 10")
+                   help="EarlyStopping 容忍轮数，默认 30")
     p.add_argument("--devices",        type=int,   default=1,
                    help="使用的设备数量；GPU 模式下可大于 1，默认 1")
     p.add_argument("--precision",      type=str,   default="auto",
@@ -387,6 +418,8 @@ def parse_args():
                    choices=["auto", "cpu", "gpu", "mps"])
     p.add_argument("--resume", action="store_true",
                    help="从 checkpoint_dir/last.ckpt 断点续训")
+    p.add_argument("--reset_early_stopping_on_resume", action="store_true",
+                   help="与 --resume 一起使用：恢复模型和优化器，但重置 EarlyStopping 历史计数")
     return p.parse_args()
 
 
@@ -470,7 +503,12 @@ def main():
     )
 
     last_ckpt = os.path.join(args.checkpoint_dir, "last.ckpt")
-    ckpt_path = last_ckpt if (args.resume and os.path.exists(last_ckpt)) else None
+    ckpt_path = None
+    if args.resume and os.path.exists(last_ckpt):
+        ckpt_path = maybe_prepare_resume_checkpoint(
+            last_ckpt,
+            args.reset_early_stopping_on_resume,
+        )
     print(f">>> {'从断点恢复: ' + ckpt_path if ckpt_path else '开始全新训练'}")
 
     trainer.fit(model, train_loader, val_loader, ckpt_path=ckpt_path)
