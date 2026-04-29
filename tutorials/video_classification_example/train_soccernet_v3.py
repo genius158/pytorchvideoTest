@@ -405,7 +405,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="SoccerNet BAS-2025 动作分类训练")
     p.add_argument("--data_root", type=str, required=True,
                    help="数据集根目录（含 train/ 和 valid/ 子目录）")
-    p.add_argument("--checkpoint_dir", type=str, default=".checkpoints_soccernet_v3")
+    p.add_argument("--checkpoint_dir", type=str, default=".checkpoints_soccernet_v4")
     p.add_argument("--num_classes",    type=int,   default=NUM_CLASSES)
     p.add_argument("--clip_duration",  type=float, default=None,
                    help="每个片段时长（秒）。默认自动按 num_frames*stride/fps 计算")
