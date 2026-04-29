@@ -44,7 +44,7 @@ import numpy as np
 import pytorch_lightning as pl
 from torch.utils.data import Dataset, DataLoader
 from torchmetrics import Accuracy
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 from pytorchvideo.transforms import (
     ApplyTransformToKey,
@@ -207,6 +207,76 @@ def get_video_transform(mode="train"):
     return ApplyTransformToKey(key="video", transform=t)
 
 
+def get_runtime_config(requested_accelerator: str, requested_devices: int, requested_precision: str):
+    def resolve_precision(default_precision):
+        if requested_precision == "auto":
+            return default_precision
+        if requested_precision == "16":
+            return 16
+        if requested_precision == "32":
+            return 32
+        if requested_precision == "bf16":
+            return "bf16"
+        raise ValueError(f"不支持的 precision: {requested_precision}")
+
+    if requested_accelerator == "gpu":
+        if not torch.cuda.is_available():
+            raise RuntimeError("指定了 --accelerator gpu，但当前环境未检测到可用 CUDA 设备。")
+        return {
+            "accelerator": "gpu",
+            "devices": requested_devices,
+            "precision": resolve_precision(16),
+            "pin_memory": True,
+            "device_name": torch.cuda.get_device_name(0),
+        }
+
+    if requested_accelerator == "mps":
+        if not (getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()):
+            raise RuntimeError("指定了 --accelerator mps，但当前环境未检测到可用 MPS 设备。")
+        return {
+            "accelerator": "mps",
+            "devices": 1,
+            "precision": resolve_precision(32),
+            "pin_memory": False,
+            "device_name": "Apple Silicon MPS",
+        }
+
+    if requested_accelerator == "cpu":
+        return {
+            "accelerator": "cpu",
+            "devices": 1,
+            "precision": resolve_precision(32),
+            "pin_memory": False,
+            "device_name": "CPU",
+        }
+
+    if torch.cuda.is_available():
+        return {
+            "accelerator": "gpu",
+            "devices": requested_devices,
+            "precision": resolve_precision(16),
+            "pin_memory": True,
+            "device_name": torch.cuda.get_device_name(0),
+        }
+
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return {
+            "accelerator": "mps",
+            "devices": 1,
+            "precision": resolve_precision(32),
+            "pin_memory": False,
+            "device_name": "Apple Silicon MPS",
+        }
+
+    return {
+        "accelerator": "cpu",
+        "devices": 1,
+        "precision": resolve_precision(32),
+        "pin_memory": False,
+        "device_name": "CPU",
+    }
+
+
 # ==========================================================================
 # 3. LightningModule
 # ==========================================================================
@@ -231,8 +301,8 @@ class SoccerNetClassifier(pl.LightningModule):
         logits = self(x)
         loss = self.criterion(logits, y)
         self.train_acc(logits, y)
-        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train/acc",  self.train_acc, prog_bar=True, on_step=False, on_epoch=True)
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train_acc", self.train_acc, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -240,8 +310,8 @@ class SoccerNetClassifier(pl.LightningModule):
         logits = self(x)
         loss = self.criterion(logits, y)
         self.val_acc(logits, y)
-        self.log("val/loss", loss, prog_bar=True)
-        self.log("val/acc",  self.val_acc, prog_bar=True)
+        self.log("val_loss", loss, prog_bar=True)
+        self.log("val_acc", self.val_acc, prog_bar=True)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -268,6 +338,13 @@ def parse_args():
     p.add_argument("--num_workers",    type=int,   default=8)
     p.add_argument("--lr",             type=float, default=1e-4)
     p.add_argument("--max_epochs",     type=int,   default=50)
+    p.add_argument("--patience",       type=int,   default=10,
+                   help="EarlyStopping 容忍轮数，默认 10")
+    p.add_argument("--devices",        type=int,   default=1,
+                   help="使用的设备数量；GPU 模式下可大于 1，默认 1")
+    p.add_argument("--precision",      type=str,   default="auto",
+                   choices=["auto", "16", "32", "bf16"],
+                   help="训练精度；auto 表示 GPU 默认 16，CPU/MPS 默认 32")
     p.add_argument("--accelerator",    type=str,   default="auto",
                    choices=["auto", "cpu", "gpu", "mps"])
     p.add_argument("--resume", action="store_true",
@@ -277,6 +354,12 @@ def parse_args():
 
 def main():
     args = parse_args()
+    runtime = get_runtime_config(args.accelerator, args.devices, args.precision)
+
+    print(
+        f">>> 当前训练设备: {runtime['device_name']} "
+        f"(accelerator={runtime['accelerator']}, devices={runtime['devices']}, precision={runtime['precision']})"
+    )
 
     data_root  = Path(args.data_root)
     train_root = data_root / "train" if (data_root / "train").exists() else data_root
@@ -291,7 +374,7 @@ def main():
         transform=get_video_transform("val"),
     )
 
-    pin = args.accelerator != "cpu"
+    pin = runtime["pin_memory"]
     train_loader = DataLoader(train_ds, batch_size=args.batch_size,
                               num_workers=args.num_workers, shuffle=True,
                               pin_memory=pin, drop_last=True)
@@ -304,20 +387,28 @@ def main():
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     ckpt_cb = ModelCheckpoint(
         dirpath=args.checkpoint_dir,
-        filename="soccernet-{epoch:02d}-{val/acc:.3f}",
+        filename="soccernet-{epoch:02d}-{val_acc:.3f}",
         save_last=True,
-        monitor="val/acc",
+        monitor="val_acc",
         mode="max",
         save_top_k=3,
     )
 
+    early_stop_cb = EarlyStopping(
+        monitor="val_acc",
+        mode="max",
+        patience=args.patience,
+        min_delta=0.001,
+        verbose=True,
+    )
+
     trainer = pl.Trainer(
-        accelerator=args.accelerator,
-        devices=1,
+        accelerator=runtime["accelerator"],
+        devices=runtime["devices"],
         max_epochs=args.max_epochs,
-        precision=32,
+        precision=runtime["precision"],
         log_every_n_steps=10,
-        callbacks=[ckpt_cb],
+        callbacks=[ckpt_cb, early_stop_cb],
     )
 
     last_ckpt = os.path.join(args.checkpoint_dir, "last.ckpt")
@@ -326,9 +417,13 @@ def main():
 
     trainer.fit(model, train_loader, val_loader, ckpt_path=ckpt_path)
 
-    print(f"\n训练完成！最佳模型: {ckpt_cb.best_model_path}")
+    print("\n训练完成！")
+    print(f"训练集样本数: {len(train_ds)}")
+    print(f"验证集样本数: {len(val_ds)}")
+    print(f"最佳模型: {ckpt_cb.best_model_path}")
     if ckpt_cb.best_model_score is not None:
-        print(f"最佳 val/acc: {ckpt_cb.best_model_score:.4f}")
+        print(f"最佳 val_acc: {ckpt_cb.best_model_score:.4f}")
+    print(f"最近检查点: {last_ckpt if os.path.exists(last_ckpt) else '未生成'}")
 
 
 if __name__ == "__main__":
