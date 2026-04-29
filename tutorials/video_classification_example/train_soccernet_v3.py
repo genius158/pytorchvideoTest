@@ -54,7 +54,7 @@ from pytorchvideo.transforms import (
     RandomShortSideScale,
     UniformTemporalSubsample,
 )
-from pytorchvideo.models.hub import x3d_s
+from pytorchvideo.models.hub import x3d_xs
 from torchvision.transforms import (
     Compose,
     Lambda,
@@ -66,12 +66,12 @@ from torchvision.transforms import (
 # ------------------------------------------------------------------
 # 与 TorchVideo Android Demo 对齐的输入配置
 #   Constants.java:
-#   - COUNT_OF_FRAMES_PER_INFERENCE = 4（此脚本当前改为 13，用于 X3D-S）
+#   - COUNT_OF_FRAMES_PER_INFERENCE = 4（此脚本当前改为 8，用于 X3D-XS）
 #   - TARGET_VIDEO_SIZE = 160
 #   - MEAN_RGB = [0.45, 0.45, 0.45]
 #   - STD_RGB  = [0.225, 0.225, 0.225]
 # ------------------------------------------------------------------
-COUNT_OF_FRAMES_PER_INFERENCE = 13
+COUNT_OF_FRAMES_PER_INFERENCE = 8
 TARGET_VIDEO_SIZE = 160
 MEAN_RGB = [0.45, 0.45, 0.45]
 STD_RGB = [0.225, 0.225, 0.225]
@@ -355,11 +355,11 @@ class SoccerNetClassifier(pl.LightningModule):
     def __init__(self, num_classes=NUM_CLASSES, lr=1e-4):
         super().__init__()
         self.save_hyperparameters()
-        checkpoint_path = Path(__file__).with_name("X3D_S.pyth")
+        checkpoint_path = Path(__file__).with_name("X3D_XS.pyth")
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"未找到本地预训练权重: {checkpoint_path}")
 
-        self.model = x3d_s(pretrained=False)
+        self.model = x3d_xs(pretrained=False)
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
         self.model.load_state_dict(checkpoint["model_state"])
         in_features = self.model.blocks[5].proj.in_features
