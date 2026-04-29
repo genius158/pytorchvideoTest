@@ -35,6 +35,7 @@ Labels-ball.json 格式:
 import os
 import json
 import argparse
+from collections import OrderedDict
 from pathlib import Path
 
 import av
@@ -102,6 +103,8 @@ class SoccerNetClipDataset(Dataset):
         self.clip_duration = clip_duration
         self.num_frames = num_frames
         self.transform = transform
+        self._container_cache = OrderedDict()
+        self._max_open_videos = 8
         self.samples = self._build_sample_list()
         print(f"[SoccerNetClipDataset] {data_root} -> {len(self.samples)} samples")
 
@@ -140,14 +143,29 @@ class SoccerNetClipDataset(Dataset):
             raise RuntimeError("未能提取任何有效样本，请检查视频文件是否存在。")
         return samples
 
+    def _get_video_container(self, video_path):
+        if video_path in self._container_cache:
+            container, stream = self._container_cache.pop(video_path)
+            self._container_cache[video_path] = (container, stream)
+            return container, stream
+
+        container = av.open(video_path)
+        stream = container.streams.video[0]
+        self._container_cache[video_path] = (container, stream)
+
+        if len(self._container_cache) > self._max_open_videos:
+            _, (old_container, _) = self._container_cache.popitem(last=False)
+            old_container.close()
+
+        return container, stream
+
     def _load_clip(self, video_path, center_sec):
         half = self.clip_duration / 2.0
         start_sec = max(0.0, center_sec - half)
         end_sec = center_sec + half
         frames = []
         try:
-            container = av.open(video_path)
-            stream = container.streams.video[0]
+            container, stream = self._get_video_container(video_path)
             seek_ts = int(start_sec / stream.time_base)
             container.seek(seek_ts, stream=stream)
             for frame in container.decode(video=0):
@@ -157,8 +175,10 @@ class SoccerNetClipDataset(Dataset):
                 if t > end_sec:
                     break
                 frames.append(frame.to_rgb().to_ndarray())
-            container.close()
         except Exception as e:
+            cached = self._container_cache.pop(video_path, None)
+            if cached is not None:
+                cached[0].close()
             print(f"[警告] {video_path} @ {center_sec:.1f}s : {e}")
 
         if not frames:
@@ -179,6 +199,11 @@ class SoccerNetClipDataset(Dataset):
             sample = self.transform(sample)
         sample["label"] = torch.tensor(sample["label"], dtype=torch.long)
         return sample
+
+    def __del__(self):
+        for container, _ in self._container_cache.values():
+            container.close()
+        self._container_cache.clear()
 
 
 # ==========================================================================
@@ -334,8 +359,8 @@ def parse_args():
     p.add_argument("--num_classes",    type=int,   default=NUM_CLASSES)
     p.add_argument("--clip_duration",  type=float, default=4.0)
     p.add_argument("--num_frames",     type=int,   default=8)
-    p.add_argument("--batch_size",     type=int,   default=2)
-    p.add_argument("--num_workers",    type=int,   default=8)
+    p.add_argument("--batch_size",     type=int,   default=8)
+    p.add_argument("--num_workers",    type=int,   default=16)
     p.add_argument("--lr",             type=float, default=1e-4)
     p.add_argument("--max_epochs",     type=int,   default=50)
     p.add_argument("--patience",       type=int,   default=10,
@@ -356,6 +381,9 @@ def main():
     args = parse_args()
     runtime = get_runtime_config(args.accelerator, args.devices, args.precision)
 
+    if runtime["accelerator"] == "gpu":
+        torch.backends.cudnn.benchmark = True
+
     print(
         f">>> 当前训练设备: {runtime['device_name']} "
         f"(accelerator={runtime['accelerator']}, devices={runtime['devices']}, precision={runtime['precision']})"
@@ -375,12 +403,26 @@ def main():
     )
 
     pin = runtime["pin_memory"]
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size,
-                              num_workers=args.num_workers, shuffle=True,
-                              pin_memory=pin, drop_last=True)
-    val_loader   = DataLoader(val_ds,   batch_size=args.batch_size,
-                              num_workers=args.num_workers, shuffle=False,
-                              pin_memory=pin)
+    loader_kwargs = {
+        "batch_size": args.batch_size,
+        "num_workers": args.num_workers,
+        "pin_memory": pin,
+    }
+    if args.num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = 4
+
+    train_loader = DataLoader(
+        train_ds,
+        shuffle=True,
+        drop_last=True,
+        **loader_kwargs,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        shuffle=False,
+        **loader_kwargs,
+    )
 
     model = SoccerNetClassifier(num_classes=args.num_classes, lr=args.lr)
 
@@ -408,6 +450,7 @@ def main():
         max_epochs=args.max_epochs,
         precision=runtime["precision"],
         log_every_n_steps=10,
+        benchmark=(runtime["accelerator"] == "gpu"),
         callbacks=[ckpt_cb, early_stop_cb],
     )
 
