@@ -375,8 +375,8 @@ def parse_args():
     p.add_argument("--batch_size",     type=int,   default=8)
     p.add_argument("--num_workers",    type=int,   default=16)
     p.add_argument("--lr",             type=float, default=1e-4)
-    p.add_argument("--max_epochs",     type=int,   default=50)
-    p.add_argument("--patience",       type=int,   default=10,
+    p.add_argument("--max_epochs",     type=int,   default=60)
+    p.add_argument("--patience",       type=int,   default=30,
                    help="EarlyStopping 容忍轮数，默认 10")
     p.add_argument("--devices",        type=int,   default=1,
                    help="使用的设备数量；GPU 模式下可大于 1，默认 1")
