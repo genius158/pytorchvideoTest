@@ -35,6 +35,7 @@ Labels-ball.json 格式:
 import os
 import json
 import argparse
+import random
 from collections import OrderedDict
 from pathlib import Path
 
@@ -98,11 +99,19 @@ class SoccerNetClipDataset(Dataset):
         transform     : pytorchvideo/torchvision 变换
     """
 
-    def __init__(self, data_root, clip_duration=4.0, num_frames=8, transform=None):
+    def __init__(
+        self,
+        data_root,
+        clip_duration=4.0,
+        num_frames=8,
+        transform=None,
+        time_jitter_sec=0.0,
+    ):
         self.data_root = Path(data_root)
         self.clip_duration = clip_duration
         self.num_frames = num_frames
         self.transform = transform
+        self.time_jitter_sec = max(0.0, float(time_jitter_sec))
         self._container_cache = OrderedDict()
         self._max_open_videos = 8
         self.samples = self._build_sample_list()
@@ -193,6 +202,8 @@ class SoccerNetClipDataset(Dataset):
 
     def __getitem__(self, idx):
         video_path, center_sec, label_idx = self.samples[idx]
+        if self.time_jitter_sec > 0:
+            center_sec = max(0.0, center_sec + random.uniform(-self.time_jitter_sec, self.time_jitter_sec))
         clip = self._load_clip(video_path, center_sec)
         sample = {"video": clip, "label": label_idx}
         if self.transform:
@@ -358,6 +369,8 @@ def parse_args():
     p.add_argument("--checkpoint_dir", type=str, default=".checkpoints_soccernet")
     p.add_argument("--num_classes",    type=int,   default=NUM_CLASSES)
     p.add_argument("--clip_duration",  type=float, default=4.0)
+    p.add_argument("--train_time_jitter_sec", type=float, default=0.5,
+                   help="训练集时间抖动范围（秒），按 ±jitter 随机偏移事件中心，验证集固定为 0")
     p.add_argument("--num_frames",     type=int,   default=8)
     p.add_argument("--batch_size",     type=int,   default=8)
     p.add_argument("--num_workers",    type=int,   default=16)
@@ -396,10 +409,12 @@ def main():
     train_ds = SoccerNetClipDataset(
         str(train_root), args.clip_duration, args.num_frames,
         transform=get_video_transform("train"),
+        time_jitter_sec=args.train_time_jitter_sec,
     )
     val_ds = SoccerNetClipDataset(
         str(val_root), args.clip_duration, args.num_frames,
         transform=get_video_transform("val"),
+        time_jitter_sec=0.0,
     )
 
     pin = runtime["pin_memory"]
