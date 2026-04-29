@@ -54,6 +54,7 @@ from pytorchvideo.transforms import (
     RandomShortSideScale,
     UniformTemporalSubsample,
 )
+from pytorchvideo.models.hub import x3d_s
 from torchvision.transforms import (
     Compose,
     Lambda,
@@ -354,9 +355,13 @@ class SoccerNetClassifier(pl.LightningModule):
     def __init__(self, num_classes=NUM_CLASSES, lr=1e-4):
         super().__init__()
         self.save_hyperparameters()
-        self.model = torch.hub.load(
-            'facebookresearch/pytorchvideo', 'x3d_s', pretrained=True
-        )
+        checkpoint_path = Path(__file__).with_name("X3D_S.pyth")
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"未找到本地预训练权重: {checkpoint_path}")
+
+        self.model = x3d_s(pretrained=False)
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        self.model.load_state_dict(checkpoint["model_state"])
         in_features = self.model.blocks[5].proj.in_features
         self.model.blocks[5].proj = nn.Linear(in_features, num_classes)
         self.criterion = nn.CrossEntropyLoss()
