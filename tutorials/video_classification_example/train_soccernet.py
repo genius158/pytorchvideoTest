@@ -1,4 +1,6 @@
 """
+python train_soccernet.py --data_root ~/data/SN-BAS-2025 --resume --patience 30 --reset_early_stopping_on_resume
+
 SoccerNet BAS-2025 球动作分类训练脚本 (基于 X3D + PyTorch Lightning)
 
 数据集结构 (SN-BAS-2025):
