@@ -1,4 +1,6 @@
 """
+python [getvideo.py](http://_vscodecontentref_/1) --data_root /path/to/SN-BAS-2025 --output_root /path/to/SN-BAS-2025-clips --clip_duration 1.6
+
 将 SoccerNet BAS-2025 标注事件离线导出为真实 mp4 小片段。
 
 数据集结构示例:
