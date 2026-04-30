@@ -45,7 +45,6 @@ import torch.nn as nn
 import numpy as np
 import pytorch_lightning as pl
 from torch.utils.data import Dataset, DataLoader
-from torch.utils.data import WeightedRandomSampler
 from torchmetrics import Accuracy
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
@@ -333,7 +332,7 @@ def get_runtime_config(requested_accelerator: str, requested_devices: int, reque
 # 3. LightningModule
 # ==========================================================================
 class SoccerNetClassifier(pl.LightningModule):
-    def __init__(self, num_classes=NUM_CLASSES, lr=1e-4, class_weights: torch.Tensor = None):
+    def __init__(self, num_classes=NUM_CLASSES, lr=1e-4):
         super().__init__()
         self.save_hyperparameters()
         checkpoint_path = Path(__file__).with_name("X3D_XS.pyth")
@@ -345,14 +344,7 @@ class SoccerNetClassifier(pl.LightningModule):
         self.model.load_state_dict(checkpoint["model_state"])
         in_features = self.model.blocks[5].proj.in_features
         self.model.blocks[5].proj = nn.Linear(in_features, num_classes)
-        if class_weights is not None:
-            self.register_buffer("class_weights", class_weights.float())
-            self.criterion = nn.CrossEntropyLoss(
-                weight=self.class_weights,
-                label_smoothing=0.1,
-            )
-        else:
-            self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
         self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         self.val_acc   = Accuracy(task="multiclass", num_classes=num_classes)
 
@@ -460,21 +452,7 @@ def main():
         time_jitter_sec=0.0,
     )
 
-    # 类别不平衡处理：按训练集频率构建类别权重与加权采样器
-    train_labels = torch.tensor([label for _, _, label in train_ds.samples], dtype=torch.long)
-    class_counts = torch.bincount(train_labels, minlength=args.num_classes).float()
-    class_weights = torch.zeros_like(class_counts)
-    valid_mask = class_counts > 0
-    class_weights[valid_mask] = class_counts.sum() / (class_counts[valid_mask] * valid_mask.sum())
-    sample_weights = class_weights[train_labels]
-    train_sampler = WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(sample_weights),
-        replacement=True,
-    )
-
-    print(f">>> 类别计数: {[int(c) for c in class_counts.tolist()]}")
-    print(f">>> 类别权重: {[round(float(w), 4) for w in class_weights.tolist()]}")
+    print(">>> 基线模式: 不使用 class weights，不使用 WeightedRandomSampler")
 
     pin = runtime["pin_memory"]
     loader_kwargs = {
@@ -488,8 +466,7 @@ def main():
 
     train_loader = DataLoader(
         train_ds,
-        sampler=train_sampler,
-        shuffle=False,
+        shuffle=True,
         drop_last=True,
         **loader_kwargs,
     )
@@ -499,7 +476,7 @@ def main():
         **loader_kwargs,
     )
 
-    model = SoccerNetClassifier(num_classes=args.num_classes, lr=args.lr, class_weights=class_weights)
+    model = SoccerNetClassifier(num_classes=args.num_classes, lr=args.lr)
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     ckpt_cb = ModelCheckpoint(
