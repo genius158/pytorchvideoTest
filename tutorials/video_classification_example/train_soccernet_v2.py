@@ -404,7 +404,7 @@ def parse_args():
     p.add_argument("--num_classes",    type=int,   default=NUM_CLASSES)
     p.add_argument("--clip_duration",  type=float, default=None,
                    help="每个片段时长（秒）。默认自动按 num_frames*stride/fps 计算")
-    p.add_argument("--train_time_jitter_sec", type=float, default=0.5,
+    p.add_argument("--train_time_jitter_sec", type=float, default=0.3,
                    help="训练集时间抖动范围（秒），按 ±jitter 随机偏移事件中心，验证集固定为 0")
     p.add_argument("--num_frames",     type=int,   default=COUNT_OF_FRAMES_PER_INFERENCE,
                    help=f"输入帧数，默认与 Android Demo 对齐为 {COUNT_OF_FRAMES_PER_INFERENCE}")
