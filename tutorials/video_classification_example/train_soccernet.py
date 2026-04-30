@@ -65,6 +65,19 @@ from torchvision.transforms import (
 )
 
 # ------------------------------------------------------------------
+# 与 TorchVideo Android Demo 对齐的输入配置
+#   Constants.java:
+#   - COUNT_OF_FRAMES_PER_INFERENCE = 4
+#   - TARGET_VIDEO_SIZE = 160
+#   - MEAN_RGB = [0.45, 0.45, 0.45]
+#   - STD_RGB  = [0.225, 0.225, 0.225]
+# ------------------------------------------------------------------
+COUNT_OF_FRAMES_PER_INFERENCE = 4
+TARGET_VIDEO_SIZE = 160
+MEAN_RGB = [0.45, 0.45, 0.45]
+STD_RGB = [0.225, 0.225, 0.225]
+
+# ------------------------------------------------------------------
 # SN-BAS-2025 的 12 个球动作类别
 # ------------------------------------------------------------------
 SOCCERNET_ACTIONS = [
@@ -222,25 +235,46 @@ class SoccerNetClipDataset(Dataset):
 # ==========================================================================
 # 2. Transform
 # ==========================================================================
-def get_video_transform(mode="train"):
-    mean = [0.45, 0.45, 0.45]
-    std  = [0.225, 0.225, 0.225]
+def temporal_stride_sample(video: torch.Tensor, num_frames: int, stride: int) -> torch.Tensor:
+    """
+    在时间维按固定步长采样，输入/输出形状均为 [C, T, H, W]。
+    - 优先使用固定 stride 的连续索引（居中窗口）
+    - 当帧数不足时回退到等间隔补齐到 num_frames
+    """
+    t = int(video.shape[1])
+    if t <= 0:
+        return video
+
+    need = (num_frames - 1) * stride + 1
+    if t >= need:
+        start = (t - need) // 2
+        idx = start + torch.arange(num_frames) * stride
+    else:
+        idx = torch.linspace(0, t - 1, steps=num_frames).long()
+
+    idx = idx.to(device=video.device)
+    return video.index_select(1, idx)
+
+
+def get_video_transform(mode="train", num_frames=COUNT_OF_FRAMES_PER_INFERENCE, temporal_stride=12):
+    mean = MEAN_RGB
+    std  = STD_RGB
     if mode == "train":
         t = Compose([
-            UniformTemporalSubsample(8),
+            Lambda(lambda x: temporal_stride_sample(x, num_frames=num_frames, stride=temporal_stride)),
             Lambda(lambda x: x / 255.0),
             Normalize(mean, std),
-            RandomShortSideScale(min_size=160, max_size=200),
-            RandomCrop(160),
+            RandomShortSideScale(min_size=TARGET_VIDEO_SIZE, max_size=TARGET_VIDEO_SIZE),
+            RandomCrop(TARGET_VIDEO_SIZE),
             RandomHorizontalFlip(p=0.5),
         ])
     else:
         t = Compose([
-            UniformTemporalSubsample(8),
+            Lambda(lambda x: temporal_stride_sample(x, num_frames=num_frames, stride=temporal_stride)),
             Lambda(lambda x: x / 255.0),
             Normalize(mean, std),
-            RandomShortSideScale(min_size=160, max_size=160),
-            CenterCrop(160),
+            RandomShortSideScale(min_size=TARGET_VIDEO_SIZE, max_size=TARGET_VIDEO_SIZE),
+            CenterCrop(TARGET_VIDEO_SIZE),
         ])
     return ApplyTransformToKey(key="video", transform=t)
 
@@ -401,10 +435,16 @@ def parse_args():
                    help="数据集根目录（含 train/ 和 valid/ 子目录）")
     p.add_argument("--checkpoint_dir", type=str, default=".checkpoints_soccernet")
     p.add_argument("--num_classes",    type=int,   default=NUM_CLASSES)
-    p.add_argument("--clip_duration",  type=float, default=4.0)
+    p.add_argument("--clip_duration",  type=float, default=None,
+                   help="每个片段时长（秒）。默认自动按 num_frames*stride/fps 计算")
     p.add_argument("--train_time_jitter_sec", type=float, default=0.5,
                    help="训练集时间抖动范围（秒），按 ±jitter 随机偏移事件中心，验证集固定为 0")
-    p.add_argument("--num_frames",     type=int,   default=8)
+    p.add_argument("--num_frames",     type=int,   default=COUNT_OF_FRAMES_PER_INFERENCE,
+                   help=f"输入帧数，默认与 Android Demo 对齐为 {COUNT_OF_FRAMES_PER_INFERENCE}")
+    p.add_argument("--sampling_stride", type=int, default=12,
+                   help="时间采样步长 stride，默认 12")
+    p.add_argument("--sampling_fps", type=float, default=30.0,
+                   help="用于估算覆盖时长的采样 fps，默认 30")
     p.add_argument("--batch_size",     type=int,   default=8)
     p.add_argument("--num_workers",    type=int,   default=16)
     p.add_argument("--lr",             type=float, default=1e-4)
@@ -427,6 +467,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.clip_duration is None:
+        args.clip_duration = args.num_frames * args.sampling_stride / args.sampling_fps
+
     runtime = get_runtime_config(args.accelerator, args.devices, args.precision)
 
     if runtime["accelerator"] == "gpu":
@@ -436,6 +479,15 @@ def main():
         f">>> 当前训练设备: {runtime['device_name']} "
         f"(accelerator={runtime['accelerator']}, devices={runtime['devices']}, precision={runtime['precision']})"
     )
+    print(
+        f">>> 输入配置: frames={args.num_frames}, size={TARGET_VIDEO_SIZE}, "
+        f"mean={MEAN_RGB}, std={STD_RGB}"
+    )
+    print(
+        f">>> 时序采样: stride={args.sampling_stride}, fps={args.sampling_fps}, "
+        f"覆盖时长≈{args.num_frames * args.sampling_stride / args.sampling_fps:.3f}s, "
+        f"clip_duration={args.clip_duration:.3f}s"
+    )
 
     data_root  = Path(args.data_root)
     train_root = data_root / "train" if (data_root / "train").exists() else data_root
@@ -443,12 +495,12 @@ def main():
 
     train_ds = SoccerNetClipDataset(
         str(train_root), args.clip_duration, args.num_frames,
-        transform=get_video_transform("train"),
+        transform=get_video_transform("train", num_frames=args.num_frames, temporal_stride=args.sampling_stride),
         time_jitter_sec=args.train_time_jitter_sec,
     )
     val_ds = SoccerNetClipDataset(
         str(val_root), args.clip_duration, args.num_frames,
-        transform=get_video_transform("val"),
+        transform=get_video_transform("val", num_frames=args.num_frames, temporal_stride=args.sampling_stride),
         time_jitter_sec=0.0,
     )
 

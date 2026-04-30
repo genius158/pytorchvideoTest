@@ -52,7 +52,6 @@ from pytorchvideo.transforms import (
     ApplyTransformToKey,
     Normalize,
     RandomShortSideScale,
-    UniformTemporalSubsample,
 )
 from pytorchvideo.models.hub import x3d_xs
 from torchvision.transforms import (
@@ -66,15 +65,18 @@ from torchvision.transforms import (
 # ------------------------------------------------------------------
 # 与 TorchVideo Android Demo 对齐的输入配置
 #   Constants.java:
-#   - COUNT_OF_FRAMES_PER_INFERENCE = 4（此脚本改为 1.6 秒内均匀时序采样 4 帧）
+#   - COUNT_OF_FRAMES_PER_INFERENCE = 5（此脚本改为 1.5 秒内均匀时序采样 5 帧）
 #   - TARGET_VIDEO_SIZE = 224
 #   - MEAN_RGB = [0.45, 0.45, 0.45]
 #   - STD_RGB  = [0.225, 0.225, 0.225]
 # ------------------------------------------------------------------
-COUNT_OF_FRAMES_PER_INFERENCE = 4
+COUNT_OF_FRAMES_PER_INFERENCE = 5
 TARGET_VIDEO_SIZE = 224
 MEAN_RGB = [0.45, 0.45, 0.45]
 STD_RGB = [0.225, 0.225, 0.225]
+# 时间窗口相对 position 的分布：左 1/4，右 3/4
+CLIP_LEFT_RATIO = 0.25
+CLIP_RIGHT_RATIO = 0.75
 
 # ------------------------------------------------------------------
 # SN-BAS-2025 的 12 个球动作类别
@@ -120,6 +122,7 @@ class SoccerNetClipDataset(Dataset):
         num_frames,
         transform=None,
         time_jitter_sec=0.0,
+        max_open_videos=8,
     ):
         self.data_root = Path(data_root)
         self.clip_duration = clip_duration
@@ -127,7 +130,7 @@ class SoccerNetClipDataset(Dataset):
         self.transform = transform
         self.time_jitter_sec = max(0.0, float(time_jitter_sec))
         self._container_cache = OrderedDict()
-        self._max_open_videos = 8
+        self._max_open_videos = max(1, int(max_open_videos))
         self.samples = self._build_sample_list()
         print(f"[SoccerNetClipDataset] {data_root} -> {len(self.samples)} samples")
 
@@ -183,9 +186,8 @@ class SoccerNetClipDataset(Dataset):
         return container, stream
 
     def _load_clip(self, video_path, center_sec):
-        half = self.clip_duration / 2.0
-        start_sec = max(0.0, center_sec - half)
-        end_sec = center_sec + half
+        start_sec = max(0.0, center_sec - self.clip_duration * CLIP_LEFT_RATIO)
+        end_sec = center_sec + self.clip_duration * CLIP_RIGHT_RATIO
         frames = []
         try:
             container, stream = self._get_video_container(video_path)
@@ -208,7 +210,7 @@ class SoccerNetClipDataset(Dataset):
             frames = [np.zeros((224, 224, 3), dtype=np.uint8)] * self.num_frames
 
         frame_count = len(frames)
-        indices = np.arange(frame_count)
+        indices = np.linspace(0, frame_count - 1, self.num_frames, dtype=int)
         clip = np.stack([frames[i] for i in indices], axis=0)   # [T, H, W, C]
         return torch.from_numpy(clip).float().permute(3, 0, 1, 2)  # [C, T, H, W]
 
@@ -237,7 +239,6 @@ def get_video_transform(mode="train", num_frames=COUNT_OF_FRAMES_PER_INFERENCE):
     std  = STD_RGB
     if mode == "train":
         t = Compose([
-            UniformTemporalSubsample(num_frames),
             Lambda(lambda x: x / 255.0),
             Normalize(mean, std),
             RandomResizedCrop(
@@ -249,7 +250,6 @@ def get_video_transform(mode="train", num_frames=COUNT_OF_FRAMES_PER_INFERENCE):
         ])
     else:
         t = Compose([
-            UniformTemporalSubsample(num_frames),
             Lambda(lambda x: x / 255.0),
             Normalize(mean, std),
             RandomShortSideScale(min_size=TARGET_VIDEO_SIZE, max_size=TARGET_VIDEO_SIZE),
@@ -387,14 +387,18 @@ def parse_args():
                    help="数据集根目录（含 train/ 和 valid/ 子目录）")
     p.add_argument("--checkpoint_dir", type=str, default=".checkpoints_soccernet_v5")
     p.add_argument("--num_classes",    type=int,   default=NUM_CLASSES)
-    p.add_argument("--clip_duration",  type=float, default=1.6,
-                   help="每个片段时长（秒），默认 1.6（即 1.6 秒内均匀时序采样 4 帧）")
-    p.add_argument("--train_time_jitter_sec", type=float, default=0.3,
+    p.add_argument("--clip_duration",  type=float, default=1.5,
+                   help="每个片段时长（秒），默认 1.5（即 1.5 秒内均匀时序采样 5 帧）")
+    p.add_argument("--train_time_jitter_sec", type=float, default=0,
                    help="训练集时间抖动范围（秒），按 ±jitter 随机偏移事件中心，验证集固定为 0")
     p.add_argument("--num_frames",     type=int,   default=COUNT_OF_FRAMES_PER_INFERENCE,
-                   help=f"输入帧数，默认 {COUNT_OF_FRAMES_PER_INFERENCE}（1.6 秒内采样）")
+                   help=f"输入帧数，默认 {COUNT_OF_FRAMES_PER_INFERENCE}（1.5 秒内采样）")
     p.add_argument("--batch_size",     type=int,   default=16)
-    p.add_argument("--num_workers",    type=int,   default=16)
+    p.add_argument("--num_workers",    type=int,   default=8)
+    p.add_argument("--prefetch_factor", type=int,  default=2,
+                   help="DataLoader 每个 worker 预取批次数；仅 num_workers>0 时生效")
+    p.add_argument("--max_open_videos", type=int,  default=8,
+                   help="每个 DataLoader worker 最多缓存的打开视频数")
     p.add_argument("--lr",             type=float, default=1e-4)
     p.add_argument("--max_epochs",     type=int,   default=60)
     p.add_argument("--patience",       type=int,   default=30,
@@ -432,7 +436,7 @@ def main():
         f"mean={MEAN_RGB}, std={STD_RGB}"
     )
     print(
-        f">>> 时序采样: UniformTemporalSubsample, {args.clip_duration:.1f} 秒窗口均匀采样 {args.num_frames} 帧, "
+        f">>> 时序采样: Dataset 内等间隔采样, {args.clip_duration:.1f} 秒窗口采样 {args.num_frames} 帧, "
         f"等效采样率≈{args.num_frames / max(args.clip_duration, 1e-6):.3f} fps, "
         f"clip_duration={args.clip_duration:.3f}s"
     )
@@ -445,11 +449,13 @@ def main():
         str(train_root), args.clip_duration, args.num_frames,
         transform=get_video_transform("train", num_frames=args.num_frames),
         time_jitter_sec=args.train_time_jitter_sec,
+        max_open_videos=args.max_open_videos,
     )
     val_ds = SoccerNetClipDataset(
         str(val_root), args.clip_duration, args.num_frames,
         transform=get_video_transform("val", num_frames=args.num_frames),
         time_jitter_sec=0.0,
+        max_open_videos=args.max_open_videos,
     )
 
     print(">>> 基线模式: 不使用 class weights，不使用 WeightedRandomSampler")
@@ -462,7 +468,7 @@ def main():
     }
     if args.num_workers > 0:
         loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"] = 4
+        loader_kwargs["prefetch_factor"] = max(1, args.prefetch_factor)
 
     train_loader = DataLoader(
         train_ds,
