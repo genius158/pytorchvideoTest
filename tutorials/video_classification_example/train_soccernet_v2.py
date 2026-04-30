@@ -425,8 +425,8 @@ def parse_args():
                    help="训练精度；auto 表示 GPU 默认 16，CPU/MPS 默认 32")
     p.add_argument("--accelerator",    type=str,   default="auto",
                    choices=["auto", "cpu", "gpu", "mps"])
-    p.add_argument("--resume", action="store_true",
-                   help="从 checkpoint_dir/last.ckpt 断点续训")
+    p.add_argument("--no_resume", action="store_true",
+                   help="即使存在 checkpoint_dir/last.ckpt 也不进行断点续训")
     return p.parse_args()
 
 
@@ -522,7 +522,8 @@ def main():
     )
 
     last_ckpt = os.path.join(args.checkpoint_dir, "last.ckpt")
-    ckpt_path = last_ckpt if (args.resume and os.path.exists(last_ckpt)) else None
+    auto_resume = not args.no_resume
+    ckpt_path = last_ckpt if (auto_resume and os.path.exists(last_ckpt)) else None
     print(f">>> {'从断点恢复: ' + ckpt_path if ckpt_path else '开始全新训练'}")
 
     trainer.fit(model, train_loader, val_loader, ckpt_path=ckpt_path)
