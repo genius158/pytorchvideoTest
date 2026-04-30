@@ -231,7 +231,14 @@ class SoccerNetClipDataset(Dataset):
         if self.time_jitter_sec > 0:
             center_sec = max(0.0, center_sec + random.uniform(-self.time_jitter_sec, self.time_jitter_sec))
         clip = self._load_clip(video_path, center_sec)
-        sample = {"video": clip, "label": label_idx}
+        sample = {
+            "video": clip,
+            "label": label_idx,
+            "index": idx,
+            "video_path": video_path,
+            "center_sec": float(center_sec),
+            "label_name": SOCCERNET_ACTIONS[label_idx],
+        }
         if self.transform:
             sample = self.transform(sample)
         sample["label"] = torch.tensor(sample["label"], dtype=torch.long)
@@ -276,6 +283,37 @@ def denormalize_video_tensor(video: torch.Tensor) -> torch.Tensor:
     return video.clamp(0.0, 1.0)
 
 
+def capture_rng_state():
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.random.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["torch_cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def restore_rng_state(state):
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.random.set_rng_state(state["torch"])
+    if "torch_cuda" in state and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(state["torch_cuda"])
+
+
+def save_video_frames(video: torch.Tensor, sample_dir: Path):
+    video = denormalize_video_tensor(video.detach().cpu())
+    frame_paths = []
+    for frame_idx in range(video.shape[1]):
+        frame = video[:, frame_idx].permute(1, 2, 0).numpy()
+        frame_uint8 = (frame * 255.0).round().astype(np.uint8)
+        frame_path = sample_dir / f"frame_{frame_idx:02d}.jpg"
+        Image.fromarray(frame_uint8).save(frame_path, format="JPEG", quality=95)
+        frame_paths.append(str(frame_path))
+    return frame_paths
+
+
 def export_dataset_cache(dataset: SoccerNetClipDataset, cache_dir: str, split_name: str):
     cache_root = Path(cache_dir) / split_name
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -301,14 +339,7 @@ def export_dataset_cache(dataset: SoccerNetClipDataset, cache_dir: str, split_na
         sample_dir.mkdir(parents=True, exist_ok=True)
         meta_path = sample_dir / "meta.json"
 
-        video = denormalize_video_tensor(sample["video"].detach().cpu())
-        frame_paths = []
-        for frame_idx in range(video.shape[1]):
-            frame = video[:, frame_idx].permute(1, 2, 0).numpy()
-            frame_uint8 = (frame * 255.0).round().astype(np.uint8)
-            frame_path = sample_dir / f"frame_{frame_idx:02d}.jpg"
-            Image.fromarray(frame_uint8).save(frame_path, format="JPEG", quality=95)
-            frame_paths.append(str(frame_path))
+        frame_paths = save_video_frames(sample["video"], sample_dir)
 
         sample_meta = {
             **info,
@@ -329,6 +360,73 @@ def export_dataset_cache(dataset: SoccerNetClipDataset, cache_dir: str, split_na
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
     print(f">>> {split_name} cache 导出完成: {summary_path}")
+
+
+def export_dataloader_cache(data_loader: DataLoader, cache_dir: str, split_name: str):
+    cache_root = Path(cache_dir) / split_name
+    cache_root.mkdir(parents=True, exist_ok=True)
+
+    summary = {
+        "split": split_name,
+        "num_batches": len(data_loader),
+        "batch_size": int(data_loader.batch_size) if data_loader.batch_size is not None else None,
+        "drop_last": bool(data_loader.drop_last),
+        "num_frames": int(data_loader.dataset.num_frames),
+        "clip_duration": float(data_loader.dataset.clip_duration),
+        "labels": SOCCERNET_ACTIONS,
+        "samples": [],
+    }
+
+    exported = 0
+    print(f">>> 导出真正送入 {split_name} DataLoader 的帧数据到: {cache_root}")
+    for batch_idx, batch in enumerate(data_loader):
+        videos = batch["video"]
+        labels = batch["label"]
+        indices = batch["index"]
+        center_secs = batch["center_sec"]
+        video_paths = batch["video_path"]
+        label_names = batch["label_name"]
+
+        batch_size = videos.shape[0]
+        for item_idx in range(batch_size):
+            label_name = str(label_names[item_idx])
+            label_dir = cache_root / label_name
+            label_dir.mkdir(parents=True, exist_ok=True)
+
+            sample_stem = f"sample_{exported:06d}"
+            sample_dir = label_dir / sample_stem
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            meta_path = sample_dir / "meta.json"
+
+            frame_paths = save_video_frames(videos[item_idx], sample_dir)
+            sample_meta = {
+                "export_index": int(exported),
+                "batch_idx": int(batch_idx),
+                "item_idx_in_batch": int(item_idx),
+                "index": int(indices[item_idx]),
+                "video_path": str(video_paths[item_idx]),
+                "center_sec": float(center_secs[item_idx]),
+                "label_idx": int(labels[item_idx]),
+                "label_name": label_name,
+                "sample_dir": str(sample_dir),
+                "frame_paths": frame_paths,
+                "shape": list(videos[item_idx].shape),
+                "dtype": str(videos[item_idx].dtype),
+            }
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(sample_meta, f, ensure_ascii=False, indent=2)
+
+            summary["samples"].append(sample_meta)
+            exported += 1
+
+        if exported % 100 == 0 or batch_idx + 1 == len(data_loader):
+            print(f">>> 已导出 {exported} 个真正用于 {split_name} 的样本")
+
+    summary["num_samples"] = exported
+    summary_path = cache_root / "summary.json"
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    print(f">>> {split_name} DataLoader cache 导出完成: {summary_path}")
 
 
 def get_runtime_config(requested_accelerator: str, requested_devices: int, requested_precision: str):
@@ -484,9 +582,9 @@ def parse_args():
     p.add_argument("--cache_dir",      type=str,   default=".cache_soccernet_frames",
                    help="导出训练帧缓存目录，默认 .cache_soccernet_frames")
     p.add_argument("--export_train_cache", action="store_true",
-                   help="将训练集用于训练的帧数据按标签导出到 cache 目录")
+                   help="按训练 DataLoader 的真实顺序、增强结果与 drop_last 规则导出训练帧")
     p.add_argument("--export_valid_cache", action="store_true",
-                   help="将验证集用于验证的帧数据按标签导出到 cache 目录")
+                   help="按验证 DataLoader 的真实顺序导出验证帧")
     p.add_argument("--export_cache_only", action="store_true",
                    help="仅导出 cache，不启动训练")
     p.add_argument("--resume", action="store_true",
@@ -533,16 +631,6 @@ def main():
         time_jitter_sec=0.0,
     )
 
-    if args.export_train_cache:
-        export_dataset_cache(train_ds, args.cache_dir, "train")
-    if args.export_valid_cache:
-        export_dataset_cache(val_ds, args.cache_dir, "valid")
-    if args.export_cache_only:
-        print(">>> 已完成 cache 导出，按参数设置跳过训练")
-        return
-
-    print(">>> 基线模式: 不使用 class weights，不使用 WeightedRandomSampler")
-
     pin = runtime["pin_memory"]
     loader_kwargs = {
         "batch_size": args.batch_size,
@@ -552,6 +640,30 @@ def main():
     if args.num_workers > 0:
         loader_kwargs["persistent_workers"] = True
         loader_kwargs["prefetch_factor"] = 4
+
+    if args.export_train_cache or args.export_valid_cache:
+        rng_state = capture_rng_state()
+        if args.export_train_cache:
+            export_train_loader = DataLoader(
+                train_ds,
+                shuffle=True,
+                drop_last=True,
+                **loader_kwargs,
+            )
+            export_dataloader_cache(export_train_loader, args.cache_dir, "train")
+        if args.export_valid_cache:
+            export_val_loader = DataLoader(
+                val_ds,
+                shuffle=False,
+                **loader_kwargs,
+            )
+            export_dataloader_cache(export_val_loader, args.cache_dir, "valid")
+        if args.export_cache_only:
+            print(">>> 已完成 cache 导出，按参数设置跳过训练")
+            return
+        restore_rng_state(rng_state)
+
+    print(">>> 基线模式: 不使用 class weights，不使用 WeightedRandomSampler")
 
     train_loader = DataLoader(
         train_ds,
