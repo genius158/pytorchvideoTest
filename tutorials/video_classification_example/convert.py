@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from torch.utils.mobile_optimizer import optimize_for_mobile
 
-from trainx3d_v3 import VideoClassificationLightningModule
+from train_soccernet_v4 import SoccerNetClassifier
 
 
 def replace_swish_with_silu(model: nn.Module) -> int:
@@ -27,13 +27,13 @@ def replace_swish_with_silu(model: nn.Module) -> int:
 def export_for_android(
     ckpt_path: str,
     output_name: str = "x3d_model_android",
-    input_shape=(1, 3, 8, 160, 160),
+    input_shape=(1, 3, 5, 224, 224),
 ) -> None:
     print("--- 开始转换过程 ---")
 
     # 1. 加载 Checkpoint
     try:
-        checkpoint = VideoClassificationLightningModule.load_from_checkpoint(
+        checkpoint = SoccerNetClassifier.load_from_checkpoint(
             ckpt_path,
             map_location="cpu",
         )
@@ -82,9 +82,9 @@ def export_for_android(
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Export X3D checkpoint to Android .ptl")
-    parser.add_argument("--ckpt", default=".checkpoints/last.ckpt", help="Checkpoint path")
+    parser.add_argument("--ckpt", default=".checkpoints_soccernet_v7/last.ckpt", help="Checkpoint path")
     parser.add_argument("--out", default="x3d_model_android", help="Output file prefix")
-    parser.add_argument("--shape", nargs=5, type=int, default=[1, 3, 8, 160, 160], help="Input shape: N C T H W")
+    parser.add_argument("--shape", nargs=5, type=int, default=[1, 3, 5, 224, 224], help="Input shape: N C T H W")
     return parser.parse_args()
 
 
