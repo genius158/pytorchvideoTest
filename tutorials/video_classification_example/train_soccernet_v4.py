@@ -74,9 +74,6 @@ COUNT_OF_FRAMES_PER_INFERENCE = 5
 TARGET_VIDEO_SIZE = 224
 MEAN_RGB = [0.45, 0.45, 0.45]
 STD_RGB = [0.225, 0.225, 0.225]
-# 时间窗口相对 position 的分布：左 1/4，右 3/4
-CLIP_LEFT_RATIO = 0.25
-CLIP_RIGHT_RATIO = 0.75
 
 # ------------------------------------------------------------------
 # SN-BAS-2025 的 12 个球动作类别
@@ -186,8 +183,9 @@ class SoccerNetClipDataset(Dataset):
         return container, stream
 
     def _load_clip(self, video_path, center_sec):
-        start_sec = max(0.0, center_sec - self.clip_duration * CLIP_LEFT_RATIO)
-        end_sec = center_sec + self.clip_duration * CLIP_RIGHT_RATIO
+        # 以标注 position 作为片段起始时刻
+        start_sec = max(0.0, center_sec)
+        end_sec = start_sec + self.clip_duration
         frames = []
         try:
             container, stream = self._get_video_container(video_path)
